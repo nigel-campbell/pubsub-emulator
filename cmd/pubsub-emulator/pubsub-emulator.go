@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"google.golang.org/grpc"
 	"log"
-	"pubsub/testutil"
+	"pubsub-emulator/testutil"
 )
 
 var (

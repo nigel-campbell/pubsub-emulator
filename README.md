@@ -4,13 +4,18 @@ This is an "out of process" emulator built on top of the emulator
 provided by https://github.com/googleapis/google-cloud-go/tree/main/pubsub/pstest.
 The difference is that this package intends to provide a persistence option.
 
-## Goal
+## Running
 
-Topics, subscriptions and published messages should persist after the emulator shuts down.
+This tool can be built using the `go` tool.
 
-## Stretch goal
+```sh
+go build pubsub-emulator/cmd/... && ./pubsub-emulator
+```
 
-Add support for emulator inspection (i.e. see topics, subscriptions, messages) 
+## Goals
+
+- Topics, subscriptions and published messages should persist after the emulator shuts down.
+- An admin page for viewing topics, subscriptions and messages
 
 ## TODOs
 
@@ -20,6 +25,7 @@ Add support for emulator inspection (i.e. see topics, subscriptions, messages)
      - [ ] Topic and subscription creation/modification/destruction
      - [ ] Message publishing
      - [ ] Subscription pulling
+   - [ ] Admin page for viewing topics, subscriptions and messages
    - [ ] Add Makefile or build script
 
 ## Milestones

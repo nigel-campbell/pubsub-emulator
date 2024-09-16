@@ -1,4 +1,4 @@
-module pubsub
+module pubsub-emulator
 
 go 1.22.2
 

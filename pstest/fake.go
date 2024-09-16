@@ -43,7 +43,7 @@ import (
 	durpb "google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"pubsub/testutil"
+	"pubsub-emulator/testutil"
 )
 
 // ReactorOptions is a map that Server uses to look up reactors.
