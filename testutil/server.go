@@ -50,6 +50,8 @@ type Server struct {
 	Port int
 	l    net.Listener
 	Gsrv *grpc.Server
+
+	done chan struct{}
 }
 
 // NewServer creates a new Server. The Server will be listening for gRPC connections
@@ -74,6 +76,10 @@ func NewServerWithPort(port int, opts ...grpc.ServerOption) (*Server, error) {
 	return s, nil
 }
 
+func (s *Server) Done() <-chan struct{} {
+	return s.done
+}
+
 // Start causes the server to start accepting incoming connections.
 // Call Start after registering handlers.
 func (s *Server) Start() {
@@ -84,17 +90,11 @@ func (s *Server) Start() {
 	}()
 }
 
-func (s *Server) BlockingStart() error {
-	if err := s.Gsrv.Serve(s.l); err != nil {
-		return err
-	}
-	return nil
-}
-
 // Close shuts down the server.
 func (s *Server) Close() {
 	s.Gsrv.Stop()
 	s.l.Close()
+	s.done <- struct{}{}
 }
 
 // PageBounds converts an incoming page size and token from an RPC request into

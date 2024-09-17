@@ -28,7 +28,6 @@ import (
 	"time"
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
-	"cloud.google.com/go/internal/testutil"
 	pb "cloud.google.com/go/pubsub/apiv1/pubsubpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -37,6 +36,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	field_mask "google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"pubsub-emulator/testutil"
 )
 
 func TestNewServerWithPort(t *testing.T) {
