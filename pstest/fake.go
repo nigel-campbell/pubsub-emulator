@@ -25,6 +25,7 @@ package pstest
 import (
 	"context"
 	"fmt"
+	"google.golang.org/grpc/reflection"
 	"io"
 	"math/rand"
 	"path"
@@ -116,6 +117,10 @@ func NewServerWithPort(port int, opts ...ServerReactorOption) *Server {
 	return NewServerWithCallback(port, func(*grpc.Server) { /* empty */ }, opts...)
 }
 
+func (s *Server) Done() <-chan struct{} {
+	return s.srv.Done()
+}
+
 // NewServerWithCallback creates new fake server running in the current process at the specified port.
 // Before starting the server, the provided callback is called to allow caller to register additional fakes
 // into grpc server.
@@ -145,6 +150,7 @@ func NewServerWithCallback(port int, callback func(*grpc.Server), opts ...Server
 	pb.RegisterPublisherServer(srv.Gsrv, &s.GServer)
 	pb.RegisterSubscriberServer(srv.Gsrv, &s.GServer)
 	pb.RegisterSchemaServiceServer(srv.Gsrv, &s.GServer)
+	reflection.Register(srv.Gsrv)
 
 	callback(srv.Gsrv)
 

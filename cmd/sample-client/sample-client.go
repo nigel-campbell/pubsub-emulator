@@ -6,6 +6,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
 	"log"
 	"os"
@@ -13,8 +14,10 @@ import (
 )
 
 const (
-	devProjectId = "dev" // NB: This value doesn't actually matter to the Pub/Sub client when initializing against the emulator
-	topicName    = "my-topic"
+	devProjectId     = "dev" // NB: This value doesn't actually matter to the Pub/Sub client when initializing against the emulator
+	topicName        = "my-topic"
+	subscriptionName = "my-subscription"
+	workerCount      = 3
 )
 
 var (
@@ -23,15 +26,14 @@ var (
 
 func main() {
 	if err := run(context.Background()); err != nil {
-		log.Fatal(err)
+		log.Fatalf("exiting prematurely with: %v", err)
 	}
 }
 
 func run(ctx context.Context) error {
 	flag.Parse()
+
 	// This Pub/Sub client is intended to run against an emulator in local dev.
-	// Ensure that the emulator host envvar is set appropriately.
-	// See https://cloud.google.com/pubsub/docs/emulator for more information.
 	if err := os.Setenv("PUBSUB_EMULATOR_HOST", fmt.Sprintf("127.0.0.1:%d", *port)); err != nil {
 		return fmt.Errorf("failed to set emulator host envvar: %w", err)
 	}
@@ -42,14 +44,70 @@ func run(ctx context.Context) error {
 	}
 	defer c.Close()
 
-	deadline := time.Now().Add(15 * time.Second)
 	log.Printf("initializing new topic against %s\n", os.Getenv("PUBSUB_EMULATOR_HOST"))
-
-	ctx, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
-	if _, err = c.CreateTopic(ctx, topicName); err != nil {
+	topic, err := c.CreateTopic(ctx, topicName)
+	if err != nil {
 		return fmt.Errorf("failed to create topic: %w", err)
 	}
 	log.Println("new topic created")
+
+	subscription, err := c.CreateSubscription(ctx, subscriptionName, pubsub.SubscriptionConfig{
+		Topic: topic,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create subscription: %w", err)
+	}
+	log.Println("new subscription created")
+
+	done := make(chan struct{})
+
+	// Receive messages concurrently.
+	go func() {
+		defer func() {
+			close(done) // In case the subscription exits early.
+		}()
+		err := subscription.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+			log.Printf("got message: %q\n", string(msg.Data))
+			msg.Ack()
+		})
+		if err != nil {
+			log.Printf("failed to receive message: %v", err)
+		}
+	}()
+
+	// Spawn multiple goroutines to publish messages until the context is done.
+	grp, ctx := errgroup.WithContext(ctx)
+	for i := 0; i < workerCount; i++ {
+		i := i
+		grp.Go(func() error {
+			return publishMessages(ctx, i, topic, done)
+		})
+	}
+
+	// Setup subscription to receive messages.
+	if err := grp.Wait(); err != nil {
+		return fmt.Errorf("failed to publish messages: %w", err)
+	}
+	return nil
+}
+
+func publishMessages(ctx context.Context, workerId int, topic *pubsub.Topic, done chan struct{}) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			return nil
+		default:
+			res := topic.Publish(ctx, &pubsub.Message{
+				Data: []byte(fmt.Sprintf("It's %s from worker %d", time.Now().Format(time.RFC3339), workerId)),
+			})
+			if _, err := res.Get(ctx); err != nil {
+				return fmt.Errorf("failed to publish message: %w", err)
+			}
+			// Sleep for a random amount of time between 0 and 10 seconds.
+			time.Sleep(time.Second * time.Duration(time.Now().UnixNano()%10))
+		}
+	}
 	return nil
 }

@@ -18,6 +18,7 @@ package testutil
 
 import (
 	"fmt"
+	"google.golang.org/grpc/reflection"
 	"log"
 	"net"
 	"regexp"
@@ -67,6 +68,10 @@ func NewServerWithPort(port int, opts ...grpc.ServerOption) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	grpcServer := grpc.NewServer()
+	reflection.Register(grpcServer)
+
 	s := &Server{
 		Addr: l.Addr().String(),
 		Port: parsePort(l.Addr().String()),
