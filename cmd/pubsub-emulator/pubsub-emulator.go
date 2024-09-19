@@ -16,7 +16,7 @@ import (
 var (
 	host = flag.String("host", "localhost", "the address to bind to on the local machine")
 	port = flag.Int("port", 8085, "the port number to bind to on the local machine")
-	dir  = flag.String("dir", "", "if set, use persistence in the given directory")
+	dir  = flag.String("dir", "", "if set, use dbclient in the given directory")
 )
 
 func main() {
@@ -30,8 +30,8 @@ func run(ctx context.Context) error {
 	flag.Parse()
 
 	if *dir != "" {
-		// TODO(nigel): Implement persistence
-		return errors.New("not yet implemented")
+		// TODO(nigel): Implement dbclient
+		return errors.New("dbclient not yet implemented")
 	}
 
 	// TODO(nigel): Add grpcui for quick admin page

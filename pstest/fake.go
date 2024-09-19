@@ -73,13 +73,18 @@ type publishResponse struct {
 // Server is a fake Pub/Sub server.
 type Server struct {
 	srv     *testutil.Server
-	Addr    string  // The address that the server is listening on.
-	GServer GServer // Not intended to be used directly.
+	Addr    string       // The address that the server is listening on.
+	GServer InmemGserver // Not intended to be used directly.
 }
 
-// GServer is the underlying service implementor. It is not intended to be used
+// Compile-time checks to ensure InmemGserver implements all interfaces
+var _ pb.PublisherServer = (*InmemGserver)(nil)
+var _ pb.SubscriberServer = (*InmemGserver)(nil)
+var _ pb.SchemaServiceServer = (*InmemGserver)(nil)
+
+// InmemGserver is the underlying service implementor. It is not intended to be used
 // directly.
-type GServer struct {
+type InmemGserver struct {
 	pb.UnimplementedPublisherServer
 	pb.UnimplementedSubscriberServer
 	pb.UnimplementedSchemaServiceServer
@@ -136,7 +141,7 @@ func NewServerWithCallback(port int, callback func(*grpc.Server), opts ...Server
 	s := &Server{
 		srv:  srv,
 		Addr: srv.Addr,
-		GServer: GServer{
+		GServer: InmemGserver{
 			topics:              map[string]*topic{},
 			subs:                map[string]*subscription{},
 			msgsByID:            map[string]*Message{},
@@ -164,7 +169,7 @@ func (s *Server) SetTimeNowFunc(f func() time.Time) {
 	s.GServer.timeNowFunc.Store(f)
 }
 
-func (s *GServer) now() time.Time {
+func (s *InmemGserver) now() time.Time {
 	return s.timeNowFunc.Load().(func() time.Time)()
 }
 
@@ -325,7 +330,7 @@ func (s *Server) Close() error {
 	return nil
 }
 
-func (s *GServer) CreateTopic(_ context.Context, t *pb.Topic) (*pb.Topic, error) {
+func (s *InmemGserver) CreateTopic(_ context.Context, t *pb.Topic) (*pb.Topic, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -348,7 +353,7 @@ func (s *GServer) CreateTopic(_ context.Context, t *pb.Topic) (*pb.Topic, error)
 	return top.proto, nil
 }
 
-func (s *GServer) GetTopic(_ context.Context, req *pb.GetTopicRequest) (*pb.Topic, error) {
+func (s *InmemGserver) GetTopic(_ context.Context, req *pb.GetTopicRequest) (*pb.Topic, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -362,7 +367,7 @@ func (s *GServer) GetTopic(_ context.Context, req *pb.GetTopicRequest) (*pb.Topi
 	return nil, status.Errorf(codes.NotFound, "topic %q", req.Topic)
 }
 
-func (s *GServer) UpdateTopic(_ context.Context, req *pb.UpdateTopicRequest) (*pb.Topic, error) {
+func (s *InmemGserver) UpdateTopic(_ context.Context, req *pb.UpdateTopicRequest) (*pb.Topic, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -423,7 +428,7 @@ func (s *GServer) UpdateTopic(_ context.Context, req *pb.UpdateTopicRequest) (*p
 	return t.proto, nil
 }
 
-func (s *GServer) ListTopics(_ context.Context, req *pb.ListTopicsRequest) (*pb.ListTopicsResponse, error) {
+func (s *InmemGserver) ListTopics(_ context.Context, req *pb.ListTopicsRequest) (*pb.ListTopicsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -449,7 +454,7 @@ func (s *GServer) ListTopics(_ context.Context, req *pb.ListTopicsRequest) (*pb.
 	return res, nil
 }
 
-func (s *GServer) ListTopicSubscriptions(_ context.Context, req *pb.ListTopicSubscriptionsRequest) (*pb.ListTopicSubscriptionsResponse, error) {
+func (s *InmemGserver) ListTopicSubscriptions(_ context.Context, req *pb.ListTopicSubscriptionsRequest) (*pb.ListTopicSubscriptionsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -474,7 +479,7 @@ func (s *GServer) ListTopicSubscriptions(_ context.Context, req *pb.ListTopicSub
 	}, nil
 }
 
-func (s *GServer) DeleteTopic(_ context.Context, req *pb.DeleteTopicRequest) (*emptypb.Empty, error) {
+func (s *InmemGserver) DeleteTopic(_ context.Context, req *pb.DeleteTopicRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -499,7 +504,7 @@ func (s *GServer) DeleteTopic(_ context.Context, req *pb.DeleteTopicRequest) (*e
 	return &emptypb.Empty{}, nil
 }
 
-func (s *GServer) CreateSubscription(_ context.Context, ps *pb.Subscription) (*pb.Subscription, error) {
+func (s *InmemGserver) CreateSubscription(_ context.Context, ps *pb.Subscription) (*pb.Subscription, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -626,7 +631,7 @@ func checkSubMessageRetention(pmrd *durpb.Duration) error {
 	return nil
 }
 
-func (s *GServer) GetSubscription(_ context.Context, req *pb.GetSubscriptionRequest) (*pb.Subscription, error) {
+func (s *InmemGserver) GetSubscription(_ context.Context, req *pb.GetSubscriptionRequest) (*pb.Subscription, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -641,7 +646,7 @@ func (s *GServer) GetSubscription(_ context.Context, req *pb.GetSubscriptionRequ
 	return sub.proto, nil
 }
 
-func (s *GServer) UpdateSubscription(_ context.Context, req *pb.UpdateSubscriptionRequest) (*pb.Subscription, error) {
+func (s *InmemGserver) UpdateSubscription(_ context.Context, req *pb.UpdateSubscriptionRequest) (*pb.Subscription, error) {
 	if req.Subscription == nil {
 		return nil, status.Errorf(codes.InvalidArgument, "missing subscription")
 	}
@@ -737,7 +742,7 @@ func (s *GServer) UpdateSubscription(_ context.Context, req *pb.UpdateSubscripti
 	return sub.proto, nil
 }
 
-func (s *GServer) ListSubscriptions(_ context.Context, req *pb.ListSubscriptionsRequest) (*pb.ListSubscriptionsResponse, error) {
+func (s *InmemGserver) ListSubscriptions(_ context.Context, req *pb.ListSubscriptionsRequest) (*pb.ListSubscriptionsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -763,7 +768,7 @@ func (s *GServer) ListSubscriptions(_ context.Context, req *pb.ListSubscriptions
 	return res, nil
 }
 
-func (s *GServer) DeleteSubscription(_ context.Context, req *pb.DeleteSubscriptionRequest) (*emptypb.Empty, error) {
+func (s *InmemGserver) DeleteSubscription(_ context.Context, req *pb.DeleteSubscriptionRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -781,7 +786,7 @@ func (s *GServer) DeleteSubscription(_ context.Context, req *pb.DeleteSubscripti
 	return &emptypb.Empty{}, nil
 }
 
-func (s *GServer) DetachSubscription(_ context.Context, req *pb.DetachSubscriptionRequest) (*pb.DetachSubscriptionResponse, error) {
+func (s *InmemGserver) DetachSubscription(_ context.Context, req *pb.DetachSubscriptionRequest) (*pb.DetachSubscriptionResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -797,7 +802,7 @@ func (s *GServer) DetachSubscription(_ context.Context, req *pb.DetachSubscripti
 	return &pb.DetachSubscriptionResponse{}, nil
 }
 
-func (s *GServer) Publish(_ context.Context, req *pb.PublishRequest) (*pb.PublishResponse, error) {
+func (s *InmemGserver) Publish(_ context.Context, req *pb.PublishRequest) (*pb.PublishResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -940,7 +945,7 @@ func (s *subscription) stop() {
 	close(s.done)
 }
 
-func (s *GServer) Acknowledge(_ context.Context, req *pb.AcknowledgeRequest) (*emptypb.Empty, error) {
+func (s *InmemGserver) Acknowledge(_ context.Context, req *pb.AcknowledgeRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -958,7 +963,7 @@ func (s *GServer) Acknowledge(_ context.Context, req *pb.AcknowledgeRequest) (*e
 	return &emptypb.Empty{}, nil
 }
 
-func (s *GServer) ModifyAckDeadline(_ context.Context, req *pb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
+func (s *InmemGserver) ModifyAckDeadline(_ context.Context, req *pb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -981,7 +986,7 @@ func (s *GServer) ModifyAckDeadline(_ context.Context, req *pb.ModifyAckDeadline
 	return &emptypb.Empty{}, nil
 }
 
-func (s *GServer) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
+func (s *InmemGserver) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
 	s.mu.Lock()
 
 	if handled, ret, err := s.runReactor(req, "Pull", &pb.PullResponse{}); handled || err != nil {
@@ -1024,7 +1029,7 @@ func (s *GServer) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullRespon
 	return &pb.PullResponse{ReceivedMessages: msgs}, nil
 }
 
-func (s *GServer) StreamingPull(sps pb.Subscriber_StreamingPullServer) error {
+func (s *InmemGserver) StreamingPull(sps pb.Subscriber_StreamingPullServer) error {
 	// Receive initial message configuring the pull.
 	req, err := sps.Recv()
 	if err != nil {
@@ -1044,7 +1049,7 @@ func (s *GServer) StreamingPull(sps pb.Subscriber_StreamingPullServer) error {
 	return err
 }
 
-func (s *GServer) Seek(ctx context.Context, req *pb.SeekRequest) (*pb.SeekResponse, error) {
+func (s *InmemGserver) Seek(ctx context.Context, req *pb.SeekRequest) (*pb.SeekResponse, error) {
 	// Only handle time-based seeking for now.
 	// This fake doesn't deal with snapshots.
 	var target time.Time
@@ -1100,7 +1105,7 @@ func (s *GServer) Seek(ctx context.Context, req *pb.SeekRequest) (*pb.SeekRespon
 
 // Gets a subscription that must exist.
 // Must be called with the lock held.
-func (s *GServer) findSubscription(name string) (*subscription, error) {
+func (s *InmemGserver) findSubscription(name string) (*subscription, error) {
 	if name == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "missing subscription")
 	}
@@ -1469,7 +1474,7 @@ func secsToDur(secs int32) time.Duration {
 
 // runReactor looks up the reactors for a function, then launches them until handled=true
 // or err is returned. If the reactor returns nil, the function returns defaultObj instead.
-func (s *GServer) runReactor(req interface{}, funcName string, defaultObj interface{}) (bool, interface{}, error) {
+func (s *InmemGserver) runReactor(req interface{}, funcName string, defaultObj interface{}) (bool, interface{}, error) {
 	if val, ok := s.reactorOptions[funcName]; ok {
 		for _, reactor := range val {
 			handled, ret, err := reactor.React(req)
@@ -1517,7 +1522,7 @@ func genRevID() string {
 	return string(id)
 }
 
-func (s *GServer) CreateSchema(_ context.Context, req *pb.CreateSchemaRequest) (*pb.Schema, error) {
+func (s *InmemGserver) CreateSchema(_ context.Context, req *pb.CreateSchemaRequest) (*pb.Schema, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1538,7 +1543,7 @@ func (s *GServer) CreateSchema(_ context.Context, req *pb.CreateSchemaRequest) (
 	return sc, nil
 }
 
-func (s *GServer) GetSchema(_ context.Context, req *pb.GetSchemaRequest) (*pb.Schema, error) {
+func (s *InmemGserver) GetSchema(_ context.Context, req *pb.GetSchemaRequest) (*pb.Schema, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1575,7 +1580,7 @@ func (s *GServer) GetSchema(_ context.Context, req *pb.GetSchemaRequest) (*pb.Sc
 	return nil, status.Errorf(codes.NotFound, "schema %q not found", req.Name)
 }
 
-func (s *GServer) ListSchemas(_ context.Context, req *pb.ListSchemasRequest) (*pb.ListSchemasResponse, error) {
+func (s *InmemGserver) ListSchemas(_ context.Context, req *pb.ListSchemasRequest) (*pb.ListSchemasResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1591,7 +1596,7 @@ func (s *GServer) ListSchemas(_ context.Context, req *pb.ListSchemasRequest) (*p
 	}, nil
 }
 
-func (s *GServer) ListSchemaRevisions(_ context.Context, req *pb.ListSchemaRevisionsRequest) (*pb.ListSchemaRevisionsResponse, error) {
+func (s *InmemGserver) ListSchemaRevisions(_ context.Context, req *pb.ListSchemaRevisionsRequest) (*pb.ListSchemaRevisionsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1605,7 +1610,7 @@ func (s *GServer) ListSchemaRevisions(_ context.Context, req *pb.ListSchemaRevis
 	}, nil
 }
 
-func (s *GServer) CommitSchema(_ context.Context, req *pb.CommitSchemaRequest) (*pb.Schema, error) {
+func (s *InmemGserver) CommitSchema(_ context.Context, req *pb.CommitSchemaRequest) (*pb.Schema, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1627,7 +1632,7 @@ func (s *GServer) CommitSchema(_ context.Context, req *pb.CommitSchemaRequest) (
 }
 
 // RollbackSchema rolls back the current schema to a previous revision by copying and creating a new revision.
-func (s *GServer) RollbackSchema(_ context.Context, req *pb.RollbackSchemaRequest) (*pb.Schema, error) {
+func (s *InmemGserver) RollbackSchema(_ context.Context, req *pb.RollbackSchemaRequest) (*pb.Schema, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1648,7 +1653,7 @@ func (s *GServer) RollbackSchema(_ context.Context, req *pb.RollbackSchemaReques
 	return nil, status.Errorf(codes.NotFound, "schema %q@%q not found", req.Name, req.RevisionId)
 }
 
-func (s *GServer) DeleteSchemaRevision(_ context.Context, req *pb.DeleteSchemaRevisionRequest) (*pb.Schema, error) {
+func (s *InmemGserver) DeleteSchemaRevision(_ context.Context, req *pb.DeleteSchemaRevisionRequest) (*pb.Schema, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1678,7 +1683,7 @@ func (s *GServer) DeleteSchemaRevision(_ context.Context, req *pb.DeleteSchemaRe
 	return nil, status.Errorf(codes.NotFound, "schema %q not found", req.Name)
 }
 
-func (s *GServer) DeleteSchema(_ context.Context, req *pb.DeleteSchemaRequest) (*emptypb.Empty, error) {
+func (s *InmemGserver) DeleteSchema(_ context.Context, req *pb.DeleteSchemaRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1696,7 +1701,7 @@ func (s *GServer) DeleteSchema(_ context.Context, req *pb.DeleteSchemaRequest) (
 }
 
 // ValidateSchema mocks the ValidateSchema call but only checks that the schema definition is not empty.
-func (s *GServer) ValidateSchema(_ context.Context, req *pb.ValidateSchemaRequest) (*pb.ValidateSchemaResponse, error) {
+func (s *InmemGserver) ValidateSchema(_ context.Context, req *pb.ValidateSchemaRequest) (*pb.ValidateSchemaResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1712,7 +1717,7 @@ func (s *GServer) ValidateSchema(_ context.Context, req *pb.ValidateSchemaReques
 
 // ValidateMessage mocks the ValidateMessage call but only checks that the schema definition to validate the
 // message against is not empty.
-func (s *GServer) ValidateMessage(_ context.Context, req *pb.ValidateMessageRequest) (*pb.ValidateMessageResponse, error) {
+func (s *InmemGserver) ValidateMessage(_ context.Context, req *pb.ValidateMessageRequest) (*pb.ValidateMessageResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
