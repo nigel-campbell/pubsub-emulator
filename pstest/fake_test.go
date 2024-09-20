@@ -53,7 +53,8 @@ func TestNewServerWithPort(t *testing.T) {
 
 	// Pass a non 0 port to demonstrate we can pass a hardcoded port for the server to listen on
 	srv := NewServerWithPort(port)
-	// defer srv.Close() // TODO(nigel): This is failing to close due to the introduction of the "done" channel in the Server struct
+	defer srv.Close()
+
 	conn, err := grpc.NewClient(srv.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
