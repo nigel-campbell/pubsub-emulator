@@ -99,7 +99,7 @@ func (s *Server) Start() {
 func (s *Server) Close() {
 	s.Gsrv.Stop()
 	s.l.Close()
-	s.done <- struct{}{}
+	s.done <- struct{}{} // TODO(nigel): This is preventing the server from closing correctly. Address this.
 }
 
 // PageBounds converts an incoming page size and token from an RPC request into
