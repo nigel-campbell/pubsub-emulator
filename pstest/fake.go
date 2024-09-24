@@ -73,8 +73,31 @@ type publishResponse struct {
 // Server is a fake Pub/Sub server.
 type Server struct {
 	srv     *testutil.Server
-	Addr    string       // The address that the server is listening on.
-	GServer InmemGserver // Not intended to be used directly.
+	Addr    string  // The address that the server is listening on.
+	GServer Gserver // Not intended to be used directly.
+}
+
+type SubscriptionServer interface {
+	Messages() []*Message
+	Message(id string) *Message
+	Close() error
+	Wait()
+	SetStreamTimeout(d time.Duration)
+	ResetPublishResponses(size int)
+	SetTimeNowFunc(f func() time.Time)
+	SetAutoPublishResponse(rsp bool)
+	AddPublishResponse(pbr *pb.PublishResponse, err error)
+	Topics() map[string]*topic
+	Subscriptions() map[string]*subscription
+	Schemas() map[string][]*pb.Schema
+	ClearMessages()
+}
+
+type Gserver interface {
+	pb.PublisherServer
+	pb.SubscriberServer
+	pb.SchemaServiceServer
+	SubscriptionServer
 }
 
 // Compile-time checks to ensure InmemGserver implements all interfaces
@@ -112,6 +135,18 @@ type InmemGserver struct {
 	autoPublishResponse bool
 }
 
+func (s *InmemGserver) Schemas() map[string][]*pb.Schema {
+	return s.schemas
+}
+
+func (s *InmemGserver) Subscriptions() map[string]*subscription {
+	return s.subs
+}
+
+func (s *InmemGserver) Topics() map[string]*topic {
+	return s.topics
+}
+
 // NewServer creates a new fake server running in the current process.
 func NewServer(opts ...ServerReactorOption) *Server {
 	return NewServerWithPort(0, opts...)
@@ -141,7 +176,7 @@ func NewServerWithCallback(port int, callback func(*grpc.Server), opts ...Server
 	s := &Server{
 		srv:  srv,
 		Addr: srv.Addr,
-		GServer: InmemGserver{
+		GServer: &InmemGserver{
 			topics:              map[string]*topic{},
 			subs:                map[string]*subscription{},
 			msgsByID:            map[string]*Message{},
@@ -151,10 +186,10 @@ func NewServerWithCallback(port int, callback func(*grpc.Server), opts ...Server
 			schemas:             map[string][]*pb.Schema{},
 		},
 	}
-	s.GServer.timeNowFunc.Store(time.Now)
-	pb.RegisterPublisherServer(srv.Gsrv, &s.GServer)
-	pb.RegisterSubscriberServer(srv.Gsrv, &s.GServer)
-	pb.RegisterSchemaServiceServer(srv.Gsrv, &s.GServer)
+	s.GServer.SetTimeNowFunc(time.Now)
+	pb.RegisterPublisherServer(srv.Gsrv, s.GServer)
+	pb.RegisterSubscriberServer(srv.Gsrv, s.GServer)
+	pb.RegisterSchemaServiceServer(srv.Gsrv, s.GServer)
 	reflection.Register(srv.Gsrv)
 
 	callback(srv.Gsrv)
@@ -166,7 +201,11 @@ func NewServerWithCallback(port int, callback func(*grpc.Server), opts ...Server
 // SetTimeNowFunc registers f as a function to
 // be used instead of time.Now for this server.
 func (s *Server) SetTimeNowFunc(f func() time.Time) {
-	s.GServer.timeNowFunc.Store(f)
+	s.GServer.SetTimeNowFunc(f)
+}
+
+func (s *InmemGserver) SetTimeNowFunc(f func() time.Time) {
+	s.timeNowFunc.Store(f)
 }
 
 func (s *InmemGserver) now() time.Time {
@@ -211,30 +250,42 @@ func (s *Server) PublishOrdered(topic string, data []byte, attrs map[string]stri
 // AddPublishResponse adds a new publish response to the channel used for
 // responding to publish requests.
 func (s *Server) AddPublishResponse(pbr *pb.PublishResponse, err error) {
+	s.GServer.AddPublishResponse(pbr, err)
+}
+
+func (s *InmemGserver) AddPublishResponse(pbr *pb.PublishResponse, err error) {
 	pr := &publishResponse{}
 	if err != nil {
 		pr.err = err
 	} else {
 		pr.resp = pbr
 	}
-	s.GServer.publishResponses <- pr
+	s.publishResponses <- pr
 }
 
 // SetAutoPublishResponse controls whether to automatically respond
 // to messages published or to use user-added responses from the
 // publishResponses channel.
 func (s *Server) SetAutoPublishResponse(autoPublishResponse bool) {
-	s.GServer.mu.Lock()
-	defer s.GServer.mu.Unlock()
-	s.GServer.autoPublishResponse = autoPublishResponse
+	s.GServer.SetAutoPublishResponse(autoPublishResponse)
+}
+
+func (s *InmemGserver) SetAutoPublishResponse(autoPublishResponse bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.autoPublishResponse = autoPublishResponse
 }
 
 // ResetPublishResponses resets the buffered publishResponses channel
 // with a new buffered channel with the given size.
 func (s *Server) ResetPublishResponses(size int) {
-	s.GServer.mu.Lock()
-	defer s.GServer.mu.Unlock()
-	s.GServer.publishResponses = make(chan *publishResponse, size)
+	s.GServer.ResetPublishResponses(size)
+}
+
+func (s *InmemGserver) ResetPublishResponses(size int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publishResponses = make(chan *publishResponse, size)
 }
 
 // SetStreamTimeout sets the amount of time a stream will be active before it shuts
@@ -242,9 +293,13 @@ func (s *Server) ResetPublishResponses(size int) {
 // minutes. If SetStreamTimeout is never called or is passed zero, streams never shut
 // down.
 func (s *Server) SetStreamTimeout(d time.Duration) {
-	s.GServer.mu.Lock()
-	defer s.GServer.mu.Unlock()
-	s.GServer.streamTimeout = d
+	s.GServer.SetStreamTimeout(d)
+}
+
+func (s *InmemGserver) SetStreamTimeout(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streamTimeout = d
 }
 
 // A Message is a message that was published to the server.
@@ -274,11 +329,15 @@ type Modack struct {
 
 // Messages returns information about all messages ever published.
 func (s *Server) Messages() []*Message {
-	s.GServer.mu.Lock()
-	defer s.GServer.mu.Unlock()
+	return s.GServer.Messages()
+}
+
+func (s *InmemGserver) Messages() []*Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	var msgs []*Message
-	for _, m := range s.GServer.msgs {
+	for _, m := range s.msgs {
 		m.Deliveries = m.deliveries
 		m.Acks = m.acks
 		m.Modacks = append([]Modack(nil), m.modacks...)
@@ -290,10 +349,14 @@ func (s *Server) Messages() []*Message {
 // Message returns the message with the given ID, or nil if no message
 // with that ID was published.
 func (s *Server) Message(id string) *Message {
-	s.GServer.mu.Lock()
-	defer s.GServer.mu.Unlock()
+	return s.GServer.Message(id)
+}
 
-	m := s.GServer.msgsByID[id]
+func (s *InmemGserver) Message(id string) *Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	m := s.msgsByID[id]
 	if m != nil {
 		m.Deliveries = m.deliveries
 		m.Acks = m.acks
@@ -304,27 +367,40 @@ func (s *Server) Message(id string) *Message {
 
 // Wait blocks until all server activity has completed.
 func (s *Server) Wait() {
-	s.GServer.wg.Wait()
+	s.GServer.Wait()
+}
+
+func (s *InmemGserver) Wait() {
+	s.wg.Wait()
 }
 
 // ClearMessages removes all published messages
 // from internal containers.
 func (s *Server) ClearMessages() {
-	s.GServer.mu.Lock()
-	s.GServer.msgs = nil
-	s.GServer.msgsByID = make(map[string]*Message)
-	for _, sub := range s.GServer.subs {
+	s.GServer.ClearMessages()
+}
+
+func (s *InmemGserver) ClearMessages() {
+	s.mu.Lock()
+	s.msgs = nil
+	s.msgsByID = make(map[string]*Message)
+	for _, sub := range s.subs {
 		sub.msgs = map[string]*message{}
 	}
-	s.GServer.mu.Unlock()
+	s.mu.Unlock()
 }
 
 // Close shuts down the server and releases all resources.
 func (s *Server) Close() error {
 	s.srv.Close()
-	s.GServer.mu.Lock()
-	defer s.GServer.mu.Unlock()
-	for _, sub := range s.GServer.subs {
+	s.GServer.Close()
+	return nil
+}
+
+func (s *InmemGserver) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sub := range s.subs {
 		sub.stop()
 	}
 	return nil

@@ -13,11 +13,14 @@ import (
 
 // Compile-time checks to ensure InmemGserver implements all interfaces
 var _ pb.PublisherServer = (*PersistentGserver)(nil)
-
-//var _ pb.SubscriberServer = (*PersistentGserver)(nil)
-// var _ pb.SchemaServiceServer = (*PersistentGserver)(nil)
+var _ pb.SubscriberServer = (*PersistentGserver)(nil)
+var _ pb.SchemaServiceServer = (*PersistentGserver)(nil)
 
 type PersistentGserver struct {
+	pb.UnimplementedPublisherServer
+	pb.UnimplementedSubscriberServer
+	pb.UnimplementedSchemaServiceServer
+
 	// NB: LevelDB does not support transactions, so we need to lock around writes.
 	mu sync.Mutex
 	db *leveldb.DB
