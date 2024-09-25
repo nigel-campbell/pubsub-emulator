@@ -25,6 +25,7 @@ package pstest
 import (
 	"context"
 	"fmt"
+	"github.com/syndtr/goleveldb/leveldb"
 	"google.golang.org/grpc/reflection"
 	"io"
 	"math/rand"
@@ -154,7 +155,8 @@ func NewServer(opts ...ServerReactorOption) *Server {
 
 // NewServerWithPort creates a new fake server running in the current process at the specified port.
 func NewServerWithPort(port int, opts ...ServerReactorOption) *Server {
-	return NewServerWithCallback(port, func(*grpc.Server) { /* empty */ }, opts...)
+	svr, _ := NewServerWithCallback(port, "", func(*grpc.Server) { /* empty */ }, opts...)
+	return svr // error is always nil since persistence is false
 }
 
 func (s *Server) Done() <-chan struct{} {
@@ -164,7 +166,7 @@ func (s *Server) Done() <-chan struct{} {
 // NewServerWithCallback creates new fake server running in the current process at the specified port.
 // Before starting the server, the provided callback is called to allow caller to register additional fakes
 // into grpc server.
-func NewServerWithCallback(port int, callback func(*grpc.Server), opts ...ServerReactorOption) *Server {
+func NewServerWithCallback(port int, dir string, callback func(*grpc.Server), opts ...ServerReactorOption) (*Server, error) {
 	srv, err := testutil.NewServerWithPort(port)
 	if err != nil {
 		panic(fmt.Sprintf("pstest.NewServerWithPort: %v", err))
@@ -173,10 +175,20 @@ func NewServerWithCallback(port int, callback func(*grpc.Server), opts ...Server
 	for _, opt := range opts {
 		reactorOptions[opt.FuncName] = append(reactorOptions[opt.FuncName], opt.Reactor)
 	}
-	s := &Server{
-		srv:  srv,
-		Addr: srv.Addr,
-		GServer: &InmemGserver{
+	var gServer Gserver
+	if dir != "" {
+		db, err := leveldb.OpenFile(dir, nil)
+		if err != nil {
+			return nil, err
+		}
+		persistent := &PersistentGserver{db: db}
+		pb.RegisterPublisherServer(srv.Gsrv, persistent)
+		pb.RegisterSubscriberServer(srv.Gsrv, persistent)
+		pb.RegisterSchemaServiceServer(srv.Gsrv, persistent)
+		reflection.Register(srv.Gsrv)
+		gServer = persistent
+	} else {
+		inmem := &InmemGserver{
 			topics:              map[string]*topic{},
 			subs:                map[string]*subscription{},
 			msgsByID:            map[string]*Message{},
@@ -184,18 +196,24 @@ func NewServerWithCallback(port int, callback func(*grpc.Server), opts ...Server
 			publishResponses:    make(chan *publishResponse, 100),
 			autoPublishResponse: true,
 			schemas:             map[string][]*pb.Schema{},
-		},
+		}
+		pb.RegisterPublisherServer(srv.Gsrv, inmem)
+		pb.RegisterSubscriberServer(srv.Gsrv, inmem)
+		pb.RegisterSchemaServiceServer(srv.Gsrv, inmem)
+		reflection.Register(srv.Gsrv)
+		gServer = inmem
+	}
+
+	s := &Server{
+		srv:     srv,
+		Addr:    srv.Addr,
+		GServer: gServer,
 	}
 	s.GServer.SetTimeNowFunc(time.Now)
-	pb.RegisterPublisherServer(srv.Gsrv, s.GServer)
-	pb.RegisterSubscriberServer(srv.Gsrv, s.GServer)
-	pb.RegisterSchemaServiceServer(srv.Gsrv, s.GServer)
-	reflection.Register(srv.Gsrv)
-
 	callback(srv.Gsrv)
 
 	srv.Start()
-	return s
+	return s, nil
 }
 
 // SetTimeNowFunc registers f as a function to

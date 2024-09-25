@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"github.com/fullstorydev/grpcui/standalone"
@@ -29,13 +28,10 @@ func run(ctx context.Context) error {
 	grpc.EnableTracing = true
 	flag.Parse()
 
-	if *dir != "" {
-		// TODO(nigel): Implement dbclient
-		return errors.New("dbclient not yet implemented")
+	srv, err := pstest.NewServerWithCallback(*port, *dir, func(s *grpc.Server) {})
+	if err != nil {
+		return fmt.Errorf("failed to start Cloud Pub/Sub emulator: %w", err)
 	}
-
-	// TODO(nigel): Add grpcui for quick admin page
-	srv := pstest.NewServerWithPort(*port)
 	defer srv.Close()
 	log.Printf("Starting Cloud Pub/Sub emulator on port %s", srv.Addr)
 

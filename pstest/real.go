@@ -9,29 +9,24 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"sync"
+	"time"
 )
 
 // Compile-time checks to ensure InmemGserver implements all interfaces
 var _ pb.PublisherServer = (*PersistentGserver)(nil)
 var _ pb.SubscriberServer = (*PersistentGserver)(nil)
 var _ pb.SchemaServiceServer = (*PersistentGserver)(nil)
+var _ SubscriptionServer = (*PersistentGserver)(nil)
 
 type PersistentGserver struct {
 	pb.UnimplementedPublisherServer
 	pb.UnimplementedSubscriberServer
 	pb.UnimplementedSchemaServiceServer
+	UnimplementedSubscriptionServer
 
 	// NB: LevelDB does not support transactions, so we need to lock around writes.
 	mu sync.Mutex
 	db *leveldb.DB
-}
-
-func NewPersistentGserver(path string) (*PersistentGserver, error) {
-	db, err := leveldb.OpenFile(path, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &PersistentGserver{db: db}, nil
 }
 
 func topicRowKey(topic string) []byte {
@@ -168,6 +163,76 @@ func (p *PersistentGserver) DeleteTopic(ctx context.Context, topicRequest *pb.De
 }
 
 func (p *PersistentGserver) DetachSubscription(ctx context.Context, subscriptionRequest *pb.DetachSubscriptionRequest) (*pb.DetachSubscriptionResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+// UnimplementedSubscriptionServer is a mock implementation of SubscriptionServer which panics on all methods
+type UnimplementedSubscriptionServer struct{}
+
+var _ SubscriptionServer = (*UnimplementedSubscriptionServer)(nil)
+
+func (u UnimplementedSubscriptionServer) Messages() []*Message {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) Message(id string) *Message {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) Wait() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) SetStreamTimeout(d time.Duration) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) ResetPublishResponses(size int) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) SetTimeNowFunc(f func() time.Time) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) SetAutoPublishResponse(rsp bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) AddPublishResponse(pbr *pb.PublishResponse, err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) Topics() map[string]*topic {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) Subscriptions() map[string]*subscription {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) Schemas() map[string][]*pb.Schema {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UnimplementedSubscriptionServer) ClearMessages() {
 	//TODO implement me
 	panic("implement me")
 }
