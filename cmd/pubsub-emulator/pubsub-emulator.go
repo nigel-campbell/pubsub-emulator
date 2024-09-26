@@ -45,7 +45,6 @@ func run(ctx context.Context) error {
 		log.Printf("Cloud Pub/Sub emulator on port %s has stopped", srv.Addr)
 		return nil
 	}
-	return nil
 }
 
 func startGrpcui(ctx context.Context) {

@@ -54,3 +54,9 @@ go build pubsub-emulator/cmd/sample-client/... && ./sample-client
 ## Constraints
 
 Must be self-contained and a single binary (i.e. use an embedded database rather than Kafka, Postgres or RabbitMQ)
+
+## LevelDB Schema
+
+Messages are stored as keys in the format `#topic:<topic-name>#message:<message-id>`. The value stored is the JSON encoded message.
+Topics are stored as keys in the format `topic:<topic-name>`. The value stored is a JSON encoded topic.
+Subscriptions are stored as keys in the format `#topic:<topic-name>#subscription:<subscription-name>`. The value stored is a cursor indicating the last message read by the subscription.

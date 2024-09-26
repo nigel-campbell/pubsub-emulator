@@ -20,13 +20,122 @@ var _ SubscriptionServer = (*PersistentGserver)(nil)
 
 type PersistentGserver struct {
 	pb.UnimplementedPublisherServer
-	pb.UnimplementedSubscriberServer
 	pb.UnimplementedSchemaServiceServer
 	UnimplementedSubscriptionServer
 
 	// NB: LevelDB does not support transactions, so we need to lock around writes.
-	mu sync.Mutex
-	db *leveldb.DB
+	mu      sync.Mutex
+	db      *leveldb.DB
+	nowFunc func() time.Time
+}
+
+func (u *PersistentGserver) SetTimeNowFunc(f func() time.Time) {
+	u.nowFunc = f
+}
+
+func (p *PersistentGserver) CreateSubscription(ctx context.Context, s *pb.Subscription) (*pb.Subscription, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Check if the subscription already exists
+	_, err := p.db.Get([]byte(s.Name), nil)
+	if err == nil {
+		// Subscription already exists
+		return nil, fmt.Errorf("subscription %s already exists", s.Name)
+	}
+
+	if !errors.Is(err, leveldb.ErrNotFound) {
+		// If there was an error other than "not found", return it
+		return nil, err
+	}
+
+	// Marshal the subscription
+	b, err := proto.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store the subscription in the database
+	if err := p.db.Put([]byte(s.Name), b, nil); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+func (p *PersistentGserver) GetSubscription(ctx context.Context, subscriptionRequest *pb.GetSubscriptionRequest) (*pb.Subscription, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) UpdateSubscription(ctx context.Context, subscriptionRequest *pb.UpdateSubscriptionRequest) (*pb.Subscription, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) ListSubscriptions(ctx context.Context, subscriptionsRequest *pb.ListSubscriptionsRequest) (*pb.ListSubscriptionsResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) DeleteSubscription(ctx context.Context, subscriptionRequest *pb.DeleteSubscriptionRequest) (*emptypb.Empty, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) ModifyAckDeadline(ctx context.Context, deadlineRequest *pb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) Acknowledge(ctx context.Context, acknowledgeRequest *pb.AcknowledgeRequest) (*emptypb.Empty, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) Pull(ctx context.Context, pullRequest *pb.PullRequest) (*pb.PullResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) StreamingPull(server pb.Subscriber_StreamingPullServer) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) ModifyPushConfig(ctx context.Context, configRequest *pb.ModifyPushConfigRequest) (*emptypb.Empty, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) GetSnapshot(ctx context.Context, snapshotRequest *pb.GetSnapshotRequest) (*pb.Snapshot, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) ListSnapshots(ctx context.Context, snapshotsRequest *pb.ListSnapshotsRequest) (*pb.ListSnapshotsResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) CreateSnapshot(ctx context.Context, snapshotRequest *pb.CreateSnapshotRequest) (*pb.Snapshot, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) UpdateSnapshot(ctx context.Context, snapshotRequest *pb.UpdateSnapshotRequest) (*pb.Snapshot, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) DeleteSnapshot(ctx context.Context, snapshotRequest *pb.DeleteSnapshotRequest) (*emptypb.Empty, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *PersistentGserver) Seek(ctx context.Context, seekRequest *pb.SeekRequest) (*pb.SeekResponse, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func topicRowKey(topic string) []byte {
@@ -120,21 +229,21 @@ func (p *PersistentGserver) Publish(_ context.Context, req *pb.PublishRequest) (
 
 	// Iterate over the messages and store them
 	for i, msg := range req.Messages {
-		msgId := fmt.Sprintf("%s:%d", req.Topic, i)
+		msgId := messageRowKey(req.Topic, msg.MessageId)
 		msgData, err := proto.Marshal(msg)
 		if err != nil {
 			return nil, err
 		}
-		if err := p.db.Put([]byte(msgId), msgData, nil); err != nil {
+		if err := p.db.Put(msgId, msgData, nil); err != nil {
 			return nil, err
 		}
-		response.MessageIds[i] = msgId
+		response.MessageIds[i] = msg.MessageId
 	}
 	return response, nil
 }
 
-func messageRowKey(topic, msgId string) []byte {
-	return []byte(fmt.Sprintf("topic:%s:message:%s", topic, msgId))
+func messageRowKey(topic string, msgId string) []byte {
+	return []byte(fmt.Sprintf("#topic:%s#message:%s", topic, msgId))
 }
 
 func (p *PersistentGserver) GetTopic(ctx context.Context, req *pb.GetTopicRequest) (*pb.Topic, error) {
