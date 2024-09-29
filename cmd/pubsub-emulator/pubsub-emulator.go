@@ -13,7 +13,6 @@ import (
 )
 
 var (
-	host = flag.String("host", "localhost", "the address to bind to on the local machine")
 	port = flag.Int("port", 8085, "the port number to bind to on the local machine")
 	dir  = flag.String("dir", "", "if set, use dbclient in the given directory")
 )

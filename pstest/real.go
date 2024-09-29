@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/util"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"sync"
@@ -56,7 +57,7 @@ func (p *PersistentGserver) CreateSubscription(ctx context.Context, s *pb.Subscr
 	}
 
 	// Store the subscription in the database
-	if err := p.db.Put([]byte(s.Name), b, nil); err != nil {
+	if err := p.db.Put(subscriptionRowKey(s.Topic, s.Name), b, nil); err != nil {
 		return nil, err
 	}
 
@@ -138,10 +139,6 @@ func (p *PersistentGserver) Seek(ctx context.Context, seekRequest *pb.SeekReques
 	panic("implement me")
 }
 
-func topicRowKey(topic string) []byte {
-	return []byte(fmt.Sprintf("topic:%s", topic))
-}
-
 func (p *PersistentGserver) CreateTopic(_ context.Context, t *pb.Topic) (*pb.Topic, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -217,33 +214,50 @@ func (p *PersistentGserver) Publish(_ context.Context, req *pb.PublishRequest) (
 	}
 
 	// Unmarshal the existing topic
-	topic := &pb.Topic{}
-	if err := proto.Unmarshal(topicData, topic); err != nil {
+	t := &pb.Topic{}
+	if err := proto.Unmarshal(topicData, t); err != nil {
 		return nil, err
 	}
 
-	// Create a response
 	response := &pb.PublishResponse{
 		MessageIds: make([]string, len(req.Messages)),
 	}
 
-	// Iterate over the messages and store them
-	for i, msg := range req.Messages {
-		msgId := messageRowKey(req.Topic, msg.MessageId)
-		msgData, err := proto.Marshal(msg)
-		if err != nil {
-			return nil, err
+	// Fetch all subscriptions given the topic
+	var subscriptions []string
+
+	prefix := topicRowKey(req.Topic)
+	// Use an iterator to scan for the prefix
+	iter := p.db.NewIterator(util.BytesPrefix(prefix), nil)
+	defer iter.Release()
+	for iter.Next() {
+		if string(iter.Key()) != string(prefix) {
+			_, sub, err := parseSubscriptionRowKey(iter.Key())
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse subscription row key")
+			}
+			subscriptions = append(subscriptions, sub)
 		}
-		if err := p.db.Put(msgId, msgData, nil); err != nil {
-			return nil, err
+	}
+
+	for _, sub := range subscriptions {
+		for i, msg := range req.Messages {
+			msgId := messageRowKey(sub, msg.MessageId)
+			msgData, err := proto.Marshal(msg)
+			if err != nil {
+				return nil, err
+			}
+			if err := p.db.Put(msgId, msgData, nil); err != nil {
+				return nil, err
+			}
+			response.MessageIds[i] = msg.MessageId
 		}
-		response.MessageIds[i] = msg.MessageId
 	}
 	return response, nil
 }
 
-func messageRowKey(topic string, msgId string) []byte {
-	return []byte(fmt.Sprintf("#topic:%s#message:%s", topic, msgId))
+func messageRowKey(subscription, msgId string) []byte {
+	return []byte(fmt.Sprintf("#subscription:%s#message:%s", subscription, msgId))
 }
 
 func (p *PersistentGserver) GetTopic(ctx context.Context, req *pb.GetTopicRequest) (*pb.Topic, error) {

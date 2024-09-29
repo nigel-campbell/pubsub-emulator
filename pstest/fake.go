@@ -169,7 +169,7 @@ func (s *Server) Done() <-chan struct{} {
 func NewServerWithCallback(port int, dir string, callback func(*grpc.Server), opts ...ServerReactorOption) (*Server, error) {
 	srv, err := testutil.NewServerWithPort(port)
 	if err != nil {
-		panic(fmt.Sprintf("pstest.NewServerWithPort: %v", err))
+		return nil, fmt.Errorf("failed to start Cloud Pub/Sub emulator: %w", err)
 	}
 	reactorOptions := ReactorOptions{}
 	for _, opt := range opts {

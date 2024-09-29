@@ -21,7 +21,8 @@ const (
 )
 
 var (
-	port = flag.Int("port", 8085, "port of the Pub/Sub emulator")
+	port        = flag.Int("port", 8085, "port of the Pub/Sub emulator")
+	synchronous = flag.Bool("synchronous", false, "use synchronous pull")
 )
 
 func main() {
@@ -66,6 +67,7 @@ func run(ctx context.Context) error {
 		defer func() {
 			close(done) // In case the subscription exits early.
 		}()
+		subscription.ReceiveSettings.Synchronous = *synchronous
 		err := subscription.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
 			log.Printf("got message: %q\n", string(msg.Data))
 			msg.Ack()

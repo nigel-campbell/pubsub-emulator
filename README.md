@@ -20,6 +20,8 @@ The driver tool can be built using the `go` tool as well.
 go build pubsub-emulator/cmd/sample-client/... && ./sample-client
 ```
 
+The admin page is the raw gRPC interface exposed via grpcui. It's available at `localhost:8080`.
+
 ## Goals
 
 - Topics, subscriptions and published messages should persist after the emulator shuts down.
@@ -29,6 +31,8 @@ go build pubsub-emulator/cmd/sample-client/... && ./sample-client
 
 - Durability beyond what's feasible with an embedded database alone.
 - Validation, testing against the real Pub/Sub API
+- Respecting the acknowledgement deadline for messages
+  - The in-memory emulator tracks ModifyAckDeadline calls but does not enforce them 
 
 ## TODOs
 
@@ -36,11 +40,11 @@ go build pubsub-emulator/cmd/sample-client/... && ./sample-client
    - [x] Stub out in-memory Pub/Sub emulator binary
    - [x] Stub out driver to validate:
      - [x] Topic and subscription creation/modification/destruction
-     - [x] Message publishing
-     - [x] Subscription pulling
+     - [x] Handle message publishing
+     - [ ] Subscription pulling and message acknolwedgements
    - [x] Admin page for viewing topics, subscriptions and messages
-   - [ ] Add Makefile or build script
-   - [ ] Add persistence layer (see PersistentGServer in real.go)
+   - [ ] Add Makefile or build script to simplify build process
+   - [x] Add persistence layer (see PersistentGServer in real.go)
    - [ ] Ensure existing unit tests cover both in-memory and persistent modes
 
 ## Milestones
@@ -48,7 +52,9 @@ go build pubsub-emulator/cmd/sample-client/... && ./sample-client
   - [x] Compiles and builds in local dev (ideally with CI)
   - [x] Supports in-memory topics/subscriptions 
   - [x] Driver tool for publishing and subscribing to messages in local dev
-  - [ ] Supports persistence
+  - [x] Supports persistence
+    - [x] Messages published to a given topic persist after emulator restart
+    - [ ] Messages are delivery and acknowledgement is supported
   - [x] UI for inspecting/debugging emulator contents
 
 ## Constraints
@@ -57,6 +63,6 @@ Must be self-contained and a single binary (i.e. use an embedded database rather
 
 ## LevelDB Schema
 
-Messages are stored as keys in the format `#topic:<topic-name>#message:<message-id>`. The value stored is the JSON encoded message.
-Topics are stored as keys in the format `topic:<topic-name>`. The value stored is a JSON encoded topic.
-Subscriptions are stored as keys in the format `#topic:<topic-name>#subscription:<subscription-name>`. The value stored is a cursor indicating the last message read by the subscription.
+Messages are stored using the following key format `#topic:<topic-id>#subscription:<subscription-id>#message:<message-id>`.
+Topics are stored using the following key format `topic:<topic-name>`.
+Subscriptions are stored using the following key format `#topic:<topic-name>#subscription:<subscription-name>`.
