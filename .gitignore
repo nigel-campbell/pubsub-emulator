@@ -1,3 +1,5 @@
 .idea
 pubsub-emulator
 sample-client
+pubsub.db/
+leveldb

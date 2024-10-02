@@ -9,6 +9,7 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/util"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"log"
 	"sync"
 	"time"
 )
@@ -85,18 +86,48 @@ func (p *PersistentGserver) DeleteSubscription(ctx context.Context, subscription
 }
 
 func (p *PersistentGserver) ModifyAckDeadline(ctx context.Context, deadlineRequest *pb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
-	//TODO implement me
-	panic("implement me")
+	// TODO implement me but don't panic! Messages are acked by deleting them from the database for now.
+	return &emptypb.Empty{}, nil
 }
 
-func (p *PersistentGserver) Acknowledge(ctx context.Context, acknowledgeRequest *pb.AcknowledgeRequest) (*emptypb.Empty, error) {
-	//TODO implement me
-	panic("implement me")
+func (p *PersistentGserver) Acknowledge(ctx context.Context, req *pb.AcknowledgeRequest) (*emptypb.Empty, error) {
+	// If the message is ackd, simply delete the message. This is pretty poor way to implement this but I want to
+	// get SOMETHING done and this achieves the desired affect of preventing the message from being redelivered so let's
+	// try it. Also, for now the ack id will match the message id.
+	for _, ackId := range req.AckIds {
+		// delete messages matching the ack id
+		err := p.db.Delete([]byte(ackId), nil)
+		if err != nil {
+			log.Println("failed to delete message with ack id", ackId)
+		}
+	}
+	return &emptypb.Empty{}, nil
 }
 
-func (p *PersistentGserver) Pull(ctx context.Context, pullRequest *pb.PullRequest) (*pb.PullResponse, error) {
-	//TODO implement me
-	panic("implement me")
+func (p *PersistentGserver) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
+	prefix := []byte(fmt.Sprintf("#subscription:%s", req.Subscription))
+	// Use an iterator to scan for the prefix
+	iter := p.db.NewIterator(util.BytesPrefix(prefix), nil)
+	defer iter.Release()
+
+	var rcvdMsgs []*pb.ReceivedMessage
+	for iter.Next() {
+		var msg pb.PubsubMessage
+		val := iter.Value()
+		err := proto.Unmarshal(val, &msg)
+		if err != nil {
+			return nil, err
+		}
+		rcvdMsgs = append(rcvdMsgs, &pb.ReceivedMessage{
+			Message: &msg,
+			AckId:   msg.MessageId, // TODO(nigel): Don't do this! The ack id is only valid for the current delivery of the message.
+		})
+	}
+
+	return &pb.PullResponse{
+		ReceivedMessages: rcvdMsgs,
+	}, nil
+
 }
 
 func (p *PersistentGserver) StreamingPull(server pb.Subscriber_StreamingPullServer) error {

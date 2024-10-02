@@ -4,6 +4,7 @@ package main
 import (
 	"cloud.google.com/go/pubsub"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"golang.org/x/sync/errgroup"
@@ -23,10 +24,12 @@ const (
 var (
 	port        = flag.Int("port", 8085, "port of the Pub/Sub emulator")
 	synchronous = flag.Bool("synchronous", false, "use synchronous pull")
+	pull        = flag.Bool("pull", true, "whether or not the client pulls")
+	duration    = flag.Duration("duration", time.Second*3, "how long to publish messages")
 )
 
 func main() {
-	if err := run(context.Background()); err != nil {
+	if err := run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("exiting prematurely with: %v", err)
 	}
 }
@@ -63,19 +66,21 @@ func run(ctx context.Context) error {
 	done := make(chan struct{})
 
 	// Receive messages concurrently.
-	go func() {
-		defer func() {
-			close(done) // In case the subscription exits early.
+	if *pull {
+		go func() {
+			defer func() {
+				close(done) // In case the subscription exits early.
+			}()
+			subscription.ReceiveSettings.Synchronous = *synchronous
+			err := subscription.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+				log.Printf("got message: %q\n", string(msg.Data))
+				msg.Ack()
+			})
+			if err != nil {
+				log.Printf("failed to receive message: %v", err)
+			}
 		}()
-		subscription.ReceiveSettings.Synchronous = *synchronous
-		err := subscription.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
-			log.Printf("got message: %q\n", string(msg.Data))
-			msg.Ack()
-		})
-		if err != nil {
-			log.Printf("failed to receive message: %v", err)
-		}
-	}()
+	}
 
 	// Spawn multiple goroutines to publish messages until the context is done.
 	grp, ctx := errgroup.WithContext(ctx)
@@ -101,14 +106,18 @@ func publishMessages(ctx context.Context, workerId int, topic *pubsub.Topic, don
 		case <-done:
 			return nil
 		default:
+			data := []byte(fmt.Sprintf("It's %s from worker %d", time.Now().Format(time.RFC3339), workerId))
 			res := topic.Publish(ctx, &pubsub.Message{
-				Data: []byte(fmt.Sprintf("It's %s from worker %d", time.Now().Format(time.RFC3339), workerId)),
+				Data: data,
 			})
 			if _, err := res.Get(ctx); err != nil {
 				return fmt.Errorf("failed to publish message: %w", err)
 			}
 			// Sleep for a random amount of time between 0 and 10 seconds.
 			time.Sleep(time.Second * time.Duration(time.Now().UnixNano()%10))
+			if !*pull {
+				log.Printf("published message: %q\n", string(data))
+			}
 		}
 	}
 	return nil

@@ -63,6 +63,8 @@ Must be self-contained and a single binary (i.e. use an embedded database rather
 
 ## LevelDB Schema
 
-Messages are stored using the following key format `#topic:<topic-id>#subscription:<subscription-id>#message:<message-id>`.
+Messages are stored using the following key format `#subscription:<subscription-id>#message:<message-id>`.
+
 Topics are stored using the following key format `topic:<topic-name>`.
+
 Subscriptions are stored using the following key format `#topic:<topic-name>#subscription:<subscription-name>`.
