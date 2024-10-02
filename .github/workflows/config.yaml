@@ -1,0 +1,28 @@
+name: Go Unit Tests
+
+on:
+  push:
+    branches:
+      - main   # Trigger on commits to the main branch
+  pull_request:
+    branches:
+      - main   # Trigger on pull requests to the main branch
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: '1.23.1'  # Set the version of Go you are using
+
+      - name: Install dependencies
+        run: go mod tidy  # Ensures dependencies are up to date
+
+      - name: Run unit tests
+        run: go test pubsub-emulator/...  # Command to run all tests in the pubsub-emulator module
