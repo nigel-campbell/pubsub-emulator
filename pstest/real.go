@@ -336,10 +336,7 @@ func (u UnimplementedSubscriptionServer) Message(id string) *Message {
 	panic("implement me")
 }
 
-func (u UnimplementedSubscriptionServer) Close() error {
-	//TODO implement me
-	panic("implement me")
-}
+func (u UnimplementedSubscriptionServer) Close() error { return nil }
 
 func (u UnimplementedSubscriptionServer) Wait() {
 	//TODO implement me
