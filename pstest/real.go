@@ -21,12 +21,12 @@ import (
 var _ pb.PublisherServer = (*PersistentGserver)(nil)
 var _ pb.SubscriberServer = (*PersistentGserver)(nil)
 var _ pb.SchemaServiceServer = (*PersistentGserver)(nil)
-var _ SubscriptionServer = (*PersistentGserver)(nil)
+var _ InmemoryServer = (*PersistentGserver)(nil)
 
 type PersistentGserver struct {
 	pb.UnimplementedPublisherServer
 	pb.UnimplementedSchemaServiceServer
-	UnimplementedSubscriptionServer
+	UnimplementedInmemoryServer // TODO(nigel): Replace with real implementation
 
 	// NB: LevelDB does not support transactions, so we need to lock around writes.
 	mu      sync.Mutex
@@ -68,24 +68,104 @@ func (p *PersistentGserver) CreateSubscription(ctx context.Context, s *pb.Subscr
 	return s, nil
 }
 
-func (p *PersistentGserver) GetSubscription(ctx context.Context, subscriptionRequest *pb.GetSubscriptionRequest) (*pb.Subscription, error) {
-	//TODO implement me
-	panic("implement me")
+func (p *PersistentGserver) GetSubscription(_ context.Context, subscriptionRequest *pb.GetSubscriptionRequest) (*pb.Subscription, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Retrieve the subscription from the database
+	subscriptionData, err := p.db.Get([]byte(subscriptionRequest.Subscription), nil)
+	if err != nil {
+		if errors.Is(err, leveldb.ErrNotFound) {
+			return nil, fmt.Errorf("subscription %s not found", subscriptionRequest.Subscription)
+		}
+		return nil, err
+	}
+
+	// Unmarshal the subscription data
+	sub := &pb.Subscription{}
+	if err := proto.Unmarshal(subscriptionData, sub); err != nil {
+		return nil, err
+	}
+
+	return sub, nil
 }
 
 func (p *PersistentGserver) UpdateSubscription(ctx context.Context, subscriptionRequest *pb.UpdateSubscriptionRequest) (*pb.Subscription, error) {
-	//TODO implement me
-	panic("implement me")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Check if the subscription exists
+	existingSubscriptionData, err := p.db.Get([]byte(subscriptionRequest.Subscription.Name), nil)
+	if err != nil {
+		if errors.Is(err, leveldb.ErrNotFound) {
+			return nil, fmt.Errorf("subscription %s not found", subscriptionRequest.Subscription.Name)
+		}
+		return nil, err
+	}
+
+	// Unmarshal the existing subscription
+	existingSubscription := &pb.Subscription{}
+	if err := proto.Unmarshal(existingSubscriptionData, existingSubscription); err != nil {
+		return nil, err
+	}
+
+	// Update the subscription with new data
+	updatedSubscription := subscriptionRequest.Subscription
+
+	// Marshal the updated subscription
+	updatedSubscriptionData, err := proto.Marshal(updatedSubscription)
+	if err != nil {
+		return nil, err
+	}
+
+	// Put the updated subscription back into the database
+	if err := p.db.Put([]byte(updatedSubscription.Name), updatedSubscriptionData, nil); err != nil {
+		return nil, err
+	}
+
+	return updatedSubscription, nil
 }
 
-func (p *PersistentGserver) ListSubscriptions(ctx context.Context, subscriptionsRequest *pb.ListSubscriptionsRequest) (*pb.ListSubscriptionsResponse, error) {
-	//TODO implement me
-	panic("implement me")
+func (p *PersistentGserver) ListSubscriptions(ctx context.Context, req *pb.ListSubscriptionsRequest) (*pb.ListSubscriptionsResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// TODO(nigel): Implement pagination
+
+	var subscriptions []*pb.Subscription
+	iter := p.db.NewIterator(util.BytesPrefix([]byte("#subscription:")), nil)
+	defer iter.Release()
+
+	for iter.Next() {
+		var sub pb.Subscription
+		if err := proto.Unmarshal(iter.Value(), &sub); err != nil {
+			return nil, err
+		}
+		subscriptions = append(subscriptions, &sub)
+	}
+
+	return &pb.ListSubscriptionsResponse{Subscriptions: subscriptions}, nil
 }
 
 func (p *PersistentGserver) DeleteSubscription(ctx context.Context, subscriptionRequest *pb.DeleteSubscriptionRequest) (*emptypb.Empty, error) {
-	//TODO implement me
-	panic("implement me")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Check if the subscription exists
+	_, err := p.db.Get([]byte(subscriptionRequest.Subscription), nil)
+	if err != nil {
+		if errors.Is(err, leveldb.ErrNotFound) {
+			return nil, fmt.Errorf("subscription %s not found", subscriptionRequest.Subscription)
+		}
+		return nil, err
+	}
+
+	// Delete the subscription from the database
+	if err := p.db.Delete([]byte(subscriptionRequest.Subscription), nil); err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
 }
 
 func (p *PersistentGserver) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
@@ -157,34 +237,6 @@ func filterMessages(rcvdMsgs []*pb.ReceivedMessage, deliveredMsgs map[string]int
 		validMessages = append(validMessages, msg)
 	}
 	return validMessages
-}
-
-func ackIds(rcvdMsgs []*pb.ReceivedMessage) []string {
-	acks := make([]string, len(rcvdMsgs))
-	for i, rcvdMsg := range rcvdMsgs {
-		acks[i] = rcvdMsg.AckId
-	}
-	return acks
-}
-
-func readAcks(db *leveldb.DB, subscriptionId string, ackIds []string) (map[string]int64, error) {
-	msgToTimestamp := make(map[string]int64) // messageId -> deliveryTimestamp
-	for _, ackId := range ackIds {
-		val, err := db.Get(ackRowKey(subscriptionId, ackId), nil)
-		if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
-			return nil, err
-		}
-		if errors.Is(err, leveldb.ErrNotFound) {
-			continue
-		}
-		var deliveredMessage DeliveredMessage
-		if err := gob.NewDecoder(bytes.NewReader(val)).Decode(&deliveredMessage); err != nil {
-			return nil, err
-		}
-		msgToTimestamp[deliveredMessage.MessageID] = deliveredMessage.DeliveryTimestamp
-		log.Printf("read ack for message %s with delivery timestamp %v", deliveredMessage.MessageID, time.Unix(deliveredMessage.DeliveryTimestamp, 0))
-	}
-	return msgToTimestamp, nil
 }
 
 func readAllAcks(db *leveldb.DB, subscriptionId string) (map[string]int64, error) {
@@ -437,73 +489,6 @@ func (p *PersistentGserver) DeleteTopic(ctx context.Context, topicRequest *pb.De
 }
 
 func (p *PersistentGserver) DetachSubscription(ctx context.Context, subscriptionRequest *pb.DetachSubscriptionRequest) (*pb.DetachSubscriptionResponse, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-// UnimplementedSubscriptionServer is a mock implementation of SubscriptionServer which panics on all methods
-type UnimplementedSubscriptionServer struct{}
-
-var _ SubscriptionServer = (*UnimplementedSubscriptionServer)(nil)
-
-func (u UnimplementedSubscriptionServer) Messages() []*Message {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) Message(id string) *Message {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) Close() error { return nil }
-
-func (u UnimplementedSubscriptionServer) Wait() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) SetStreamTimeout(d time.Duration) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) ResetPublishResponses(size int) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) SetTimeNowFunc(f func() time.Time) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) SetAutoPublishResponse(rsp bool) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) AddPublishResponse(pbr *pb.PublishResponse, err error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) Topics() map[string]*topic {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) Subscriptions() map[string]*subscription {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) Schemas() map[string][]*pb.Schema {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (u UnimplementedSubscriptionServer) ClearMessages() {
 	//TODO implement me
 	panic("implement me")
 }

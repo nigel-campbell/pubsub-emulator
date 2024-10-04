@@ -82,6 +82,38 @@ func TestPersistentServer(t *testing.T) {
 	}
 }
 
+func TestPersistentSubscriptionServer(t *testing.T) {
+	// Remove the database file if it exists.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working directory: %v", err)
+	}
+	t.Logf("Current working directory: %s", cwd)
+	_ = os.RemoveAll(fmt.Sprintf("%s/pubsub.db/", cwd))
+
+	srv, err := NewServerWithCallback(3000, "pubsub.db", func(s *grpc.Server) {})
+	if err != nil {
+		t.Fatalf("failed to start Cloud Pub/Sub emulator: %v", err)
+	}
+	defer srv.Close()
+	t.Logf("Starting Cloud Pub/Sub emulator on port %s", srv.Addr)
+
+	// This Pub/Sub client is intended to run against an emulator in local dev.
+	err = os.Setenv("PUBSUB_EMULATOR_HOST", fmt.Sprintf("127.0.0.1:%d", 3000))
+	Ok(t, err, "failed to set emulator host envvar")
+
+	ctx := context.Background()
+
+	client, err := pubsub.NewClient(ctx, "dev", option.WithoutAuthentication())
+	Ok(t, err, "failed to initialize Pub/Sub client")
+	defer client.Close()
+
+	_, err = client.CreateTopic(ctx, "new-topic")
+	Ok(t, err, "failed to create topic")
+
+	// TODO(nigel): Finish me!
+}
+
 func Ok(t *testing.T, err error, msg string) {
 	if err != nil {
 		t.Fatalf("%s: %v", msg, err)

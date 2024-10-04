@@ -78,7 +78,7 @@ type Server struct {
 	GServer Gserver // Not intended to be used directly.
 }
 
-type SubscriptionServer interface {
+type InmemoryServer interface {
 	Messages() []*Message
 	Message(id string) *Message
 	Close() error
@@ -98,7 +98,7 @@ type Gserver interface {
 	pb.PublisherServer
 	pb.SubscriberServer
 	pb.SchemaServiceServer
-	SubscriptionServer
+	InmemoryServer
 }
 
 // Compile-time checks to ensure InmemGserver implements all interfaces
