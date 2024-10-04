@@ -51,20 +51,35 @@ func TestPersistentServer(t *testing.T) {
 	Ok(t, err, "failed to publish message")
 
 	var msgs []*pubsub.Message
+	ackHandler := func(ctx context.Context, msg *pubsub.Message) {
+		msgs = append(msgs, msg)
+		msg.Ack()
+	}
+
 	cctx, cancel := context.WithDeadline(ctx, time.Now().Add(3*time.Second))
 	defer cancel()
 
 	_subscription.ReceiveSettings.Synchronous = true
-	err = _subscription.Receive(cctx, func(ctx context.Context, msg *pubsub.Message) {
-		msgs = append(msgs, msg)
-		msg.Ack()
-	})
+	err = _subscription.Receive(cctx, ackHandler)
 
 	Ok(t, err, "failed to receive message")
-	if len(msgs) > 0 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected only 1 message, got %d", len(msgs))
 	}
+	t.Logf("recieved %d messages", len(msgs))
 
+	res = _topic.Publish(ctx, &pubsub.Message{Data: []byte("hello")})
+	_, err = res.Get(ctx)
+	Ok(t, err, "failed to publish message")
+
+	cctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	err = _subscription.Receive(cctx, ackHandler)
+
+	Ok(t, err, "failed to receive message")
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
 }
 
 func Ok(t *testing.T, err error, msg string) {

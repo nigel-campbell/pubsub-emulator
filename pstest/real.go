@@ -1,8 +1,10 @@
 package pstest
 
 import (
+	"bytes"
 	pb "cloud.google.com/go/pubsub/apiv1/pubsubpb"
 	"context"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"github.com/syndtr/goleveldb/leveldb"
@@ -10,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"log"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -85,7 +88,7 @@ func (p *PersistentGserver) DeleteSubscription(ctx context.Context, subscription
 	panic("implement me")
 }
 
-func (p *PersistentGserver) ModifyAckDeadline(ctx context.Context, deadlineRequest *pb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
+func (p *PersistentGserver) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
 	// TODO implement me but don't panic! Messages are acked by deleting them from the database for now.
 	return &emptypb.Empty{}, nil
 }
@@ -104,12 +107,125 @@ func (p *PersistentGserver) Acknowledge(ctx context.Context, req *pb.Acknowledge
 	return &emptypb.Empty{}, nil
 }
 
-func (p *PersistentGserver) Pull(ctx context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
-	prefix := []byte(fmt.Sprintf("#subscription:%s", req.Subscription))
-	// Use an iterator to scan for the prefix
-	iter := p.db.NewIterator(util.BytesPrefix(prefix), nil)
-	defer iter.Release()
+// DeliveredMessage is a struct that represents a message that has been delivered to a subscriber
+// It stores the message id and the delivery timestamp to enforce the ack deadline.
+type DeliveredMessage struct {
+	MessageID         string
+	DeliveryTimestamp int64
+}
 
+func (p *PersistentGserver) Pull(_ context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
+	defer p.mu.Unlock()
+	p.mu.Lock()
+
+	pulledMessages, err := getMessages(p.db, req.Subscription)
+	if err != nil {
+		return nil, err
+	}
+
+	// fetch all acks for the subscription
+	deliveredMsgs, err := readAllAcks(p.db, req.Subscription)
+	if err != nil {
+		return nil, err
+	}
+
+	validMessages := pulledMessages
+	if len(deliveredMsgs) > 0 {
+		validMessages = filterMessages(pulledMessages, deliveredMsgs)
+	}
+	//log.Printf("pulled %d messages, %d valid messages", len(pulledMessages), len(validMessages))
+
+	if err := writeAcks(p.db, req.Subscription, validMessages); err != nil {
+		return nil, err
+	}
+
+	return &pb.PullResponse{
+		ReceivedMessages: validMessages,
+	}, nil
+}
+
+// filterMessages filters out messages that have already been delivered and past their acknowledgement deadline
+func filterMessages(rcvdMsgs []*pb.ReceivedMessage, deliveredMsgs map[string]int64) []*pb.ReceivedMessage {
+	var validMessages []*pb.ReceivedMessage
+	for _, msg := range rcvdMsgs {
+		deliveryTime, ok := deliveredMsgs[msg.Message.MessageId]
+		timeUntilDeadline := time.Since(time.Unix(deliveryTime, 0))
+		if ok && timeUntilDeadline < time.Second*30 { // TODO(nigel): This should be configurable per subscriptpion
+			continue
+		}
+		log.Printf("current time is %v, message delivered is %v (%s until deadline)", time.Now(), deliveryTime, timeUntilDeadline)
+		validMessages = append(validMessages, msg)
+	}
+	return validMessages
+}
+
+func ackIds(rcvdMsgs []*pb.ReceivedMessage) []string {
+	acks := make([]string, len(rcvdMsgs))
+	for i, rcvdMsg := range rcvdMsgs {
+		acks[i] = rcvdMsg.AckId
+	}
+	return acks
+}
+
+func readAcks(db *leveldb.DB, subscriptionId string, ackIds []string) (map[string]int64, error) {
+	msgToTimestamp := make(map[string]int64) // messageId -> deliveryTimestamp
+	for _, ackId := range ackIds {
+		val, err := db.Get(ackRowKey(subscriptionId, ackId), nil)
+		if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
+			return nil, err
+		}
+		if errors.Is(err, leveldb.ErrNotFound) {
+			continue
+		}
+		var deliveredMessage DeliveredMessage
+		if err := gob.NewDecoder(bytes.NewReader(val)).Decode(&deliveredMessage); err != nil {
+			return nil, err
+		}
+		msgToTimestamp[deliveredMessage.MessageID] = deliveredMessage.DeliveryTimestamp
+		log.Printf("read ack for message %s with delivery timestamp %v", deliveredMessage.MessageID, time.Unix(deliveredMessage.DeliveryTimestamp, 0))
+	}
+	return msgToTimestamp, nil
+}
+
+func readAllAcks(db *leveldb.DB, subscriptionId string) (map[string]int64, error) {
+	prefix := []byte(fmt.Sprintf("#subscription:%s#ack:", subscriptionId))
+	iter := db.NewIterator(util.BytesPrefix(prefix), nil)
+	defer iter.Release()
+	msgToTimestamp := make(map[string]int64)
+	for iter.Next() {
+		var deliveredMessage DeliveredMessage
+		if err := gob.NewDecoder(bytes.NewReader(iter.Value())).Decode(&deliveredMessage); err != nil {
+			return nil, err
+		}
+		msgToTimestamp[deliveredMessage.MessageID] = deliveredMessage.DeliveryTimestamp
+	}
+	return msgToTimestamp, nil
+}
+
+func writeAcks(db *leveldb.DB, subscriptionId string, rcvdMsgs []*pb.ReceivedMessage) error {
+	deliveryTimestamp := time.Now().Unix()
+	for _, rcvdMsg := range rcvdMsgs {
+		msg := DeliveredMessage{
+			MessageID:         rcvdMsg.Message.MessageId,
+			DeliveryTimestamp: deliveryTimestamp,
+		}
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(&msg); err != nil {
+			return err // This should never fail because we're encoding a struct
+		}
+		err := db.Put(ackRowKey(subscriptionId, rcvdMsg.AckId), buf.Bytes(), nil)
+		if err != nil {
+			return err
+		}
+		log.Printf("wrote ack id %s for message %s with delivery timestamp %v", rcvdMsg.AckId, msg.MessageID, time.Unix(msg.DeliveryTimestamp, 0))
+	}
+	return nil
+}
+
+func getMessages(db *leveldb.DB, subscriptionId string) ([]*pb.ReceivedMessage, error) {
+	prefix := []byte(fmt.Sprintf("#subscription:%s#message:", subscriptionId))
+	iter := db.NewIterator(util.BytesPrefix(prefix), nil)
+	defer iter.Release()
 	var rcvdMsgs []*pb.ReceivedMessage
 	for iter.Next() {
 		var msg pb.PubsubMessage
@@ -118,16 +234,19 @@ func (p *PersistentGserver) Pull(ctx context.Context, req *pb.PullRequest) (*pb.
 		if err != nil {
 			return nil, err
 		}
+
+		// the ackId is just a random string for now
+		ackId := fmt.Sprintf("%d", rand.Int())
 		rcvdMsgs = append(rcvdMsgs, &pb.ReceivedMessage{
 			Message: &msg,
-			AckId:   msg.MessageId, // TODO(nigel): Don't do this! The ack id is only valid for the current delivery of the message.
+			AckId:   ackId,
 		})
 	}
+	return rcvdMsgs, nil
+}
 
-	return &pb.PullResponse{
-		ReceivedMessages: rcvdMsgs,
-	}, nil
-
+func ackRowKey(subscriptionId, ackId string) []byte {
+	return []byte(fmt.Sprintf("#subscription:%s#ack:%s", subscriptionId, ackId))
 }
 
 func (p *PersistentGserver) StreamingPull(server pb.Subscriber_StreamingPullServer) error {
@@ -273,6 +392,7 @@ func (p *PersistentGserver) Publish(_ context.Context, req *pb.PublishRequest) (
 
 	for _, sub := range subscriptions {
 		for i, msg := range req.Messages {
+			msg.MessageId = fmt.Sprintf("%d", rand.Int())
 			msgId := messageRowKey(sub, msg.MessageId)
 			msgData, err := proto.Marshal(msg)
 			if err != nil {
