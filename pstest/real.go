@@ -11,7 +11,6 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/util"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -22,6 +21,11 @@ var _ pb.PublisherServer = (*PersistentGserver)(nil)
 var _ pb.SubscriberServer = (*PersistentGserver)(nil)
 var _ pb.SchemaServiceServer = (*PersistentGserver)(nil)
 var _ InmemoryServer = (*PersistentGserver)(nil)
+
+const (
+	// TODO(nigel): This should be configurable per subscription
+	defaultAckDeadline = 30 * time.Second
+)
 
 type PersistentGserver struct {
 	pb.UnimplementedPublisherServer
@@ -174,16 +178,6 @@ func (p *PersistentGserver) ModifyAckDeadline(ctx context.Context, req *pb.Modif
 }
 
 func (p *PersistentGserver) Acknowledge(ctx context.Context, req *pb.AcknowledgeRequest) (*emptypb.Empty, error) {
-	// If the message is ackd, simply delete the message. This is pretty poor way to implement this but I want to
-	// get SOMETHING done and this achieves the desired affect of preventing the message from being redelivered so let's
-	// try it. Also, for now the ack id will match the message id.
-	for _, ackId := range req.AckIds {
-		// delete messages matching the ack id
-		err := p.db.Delete([]byte(ackId), nil)
-		if err != nil {
-			log.Println("failed to delete message with ack id", ackId)
-		}
-	}
 	return &emptypb.Empty{}, nil
 }
 
@@ -213,7 +207,6 @@ func (p *PersistentGserver) Pull(_ context.Context, req *pb.PullRequest) (*pb.Pu
 	if len(deliveredMsgs) > 0 {
 		validMessages = filterMessages(pulledMessages, deliveredMsgs)
 	}
-	//log.Printf("pulled %d messages, %d valid messages", len(pulledMessages), len(validMessages))
 
 	if err := writeAcks(p.db, req.Subscription, validMessages); err != nil {
 		return nil, err
@@ -230,10 +223,9 @@ func filterMessages(rcvdMsgs []*pb.ReceivedMessage, deliveredMsgs map[string]int
 	for _, msg := range rcvdMsgs {
 		deliveryTime, ok := deliveredMsgs[msg.Message.MessageId]
 		timeUntilDeadline := time.Since(time.Unix(deliveryTime, 0))
-		if ok && timeUntilDeadline < time.Second*30 { // TODO(nigel): This should be configurable per subscriptpion
+		if ok && timeUntilDeadline < defaultAckDeadline { // TODO(nigel): This should be configurable per subscriptpion
 			continue
 		}
-		log.Printf("current time is %v, message delivered is %v (%s until deadline)", time.Now(), deliveryTime, timeUntilDeadline)
 		validMessages = append(validMessages, msg)
 	}
 	return validMessages
@@ -269,7 +261,6 @@ func writeAcks(db *leveldb.DB, subscriptionId string, rcvdMsgs []*pb.ReceivedMes
 		if err != nil {
 			return err
 		}
-		log.Printf("wrote ack id %s for message %s with delivery timestamp %v", rcvdMsg.AckId, msg.MessageID, time.Unix(msg.DeliveryTimestamp, 0))
 	}
 	return nil
 }

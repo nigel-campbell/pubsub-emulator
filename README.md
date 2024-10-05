@@ -41,7 +41,7 @@ The admin page is the raw gRPC interface exposed via grpcui. It's available at `
    - [x] Stub out driver to validate:
      - [x] Topic and subscription creation/modification/destruction
      - [x] Handle message publishing
-     - [ ] Subscription pulling and message acknolwedgements
+     - [x] Subscription pulling and message acknolwedgements
    - [x] Admin page for viewing topics, subscriptions and messages
    - [ ] Add Makefile or build script to simplify build process
    - [x] Add persistence layer (see PersistentGServer in real.go)
