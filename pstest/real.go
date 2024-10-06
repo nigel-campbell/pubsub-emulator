@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/util"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"math/rand"
@@ -130,7 +132,7 @@ func (p *PersistentGserver) UpdateSubscription(ctx context.Context, subscription
 	return updatedSubscription, nil
 }
 
-func (p *PersistentGserver) ListSubscriptions(ctx context.Context, req *pb.ListSubscriptionsRequest) (*pb.ListSubscriptionsResponse, error) {
+func (p *PersistentGserver) ListSubscriptions(_ context.Context, req *pb.ListSubscriptionsRequest) (*pb.ListSubscriptionsResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -172,20 +174,61 @@ func (p *PersistentGserver) DeleteSubscription(ctx context.Context, subscription
 	return &emptypb.Empty{}, nil
 }
 
-func (p *PersistentGserver) ModifyAckDeadline(ctx context.Context, req *pb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
-	// TODO implement me but don't panic! Messages are acked by deleting them from the database for now.
+func (p *PersistentGserver) ModifyAckDeadline(_ context.Context, req *pb.ModifyAckDeadlineRequest) (*emptypb.Empty, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, ackId := range req.AckIds {
+		ackData, err := p.db.Get(ackRowKey(req.Subscription, ackId), nil)
+		if err != nil {
+			return nil, err
+		}
+		var ack DeliveredMessage
+		if err := gob.NewDecoder(bytes.NewReader(ackData)).Decode(&ack); err != nil {
+			return nil, err
+		}
+		ack.AckDeadline = time.Duration(req.AckDeadlineSeconds) * time.Second
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(&ack); err != nil {
+			return nil, err
+		}
+		err = p.db.Put(ackRowKey(req.Subscription, ackId), buf.Bytes(), nil)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &emptypb.Empty{}, nil
 }
 
-func (p *PersistentGserver) Acknowledge(ctx context.Context, req *pb.AcknowledgeRequest) (*emptypb.Empty, error) {
+func (p *PersistentGserver) Acknowledge(_ context.Context, req *pb.AcknowledgeRequest) (*emptypb.Empty, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, ackId := range req.AckIds {
+		ackData, err := p.db.Get(ackRowKey(req.Subscription, ackId), nil)
+		if err != nil {
+			return nil, err
+		}
+		var ack DeliveredMessage
+		if err := gob.NewDecoder(bytes.NewReader(ackData)).Decode(&ack); err != nil {
+			return nil, err
+		}
+		err = p.db.Delete(messageRowKey(req.Subscription, ack.MessageID), nil)
+		if err != nil {
+			return nil, err
+		}
+		err = p.db.Delete(ackRowKey(req.Subscription, ackId), nil)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &emptypb.Empty{}, nil
 }
 
 // DeliveredMessage is a struct that represents a message that has been delivered to a subscriber
-// It stores the message id and the delivery timestamp to enforce the ack deadline.
+// It stores the message id, the delivery timestamp and the deadline for acknowledging the message.
 type DeliveredMessage struct {
 	MessageID         string
 	DeliveryTimestamp int64
+	AckDeadline       time.Duration
 }
 
 func (p *PersistentGserver) Pull(_ context.Context, req *pb.PullRequest) (*pb.PullResponse, error) {
@@ -221,9 +264,8 @@ func (p *PersistentGserver) Pull(_ context.Context, req *pb.PullRequest) (*pb.Pu
 func filterMessages(rcvdMsgs []*pb.ReceivedMessage, deliveredMsgs map[string]int64) []*pb.ReceivedMessage {
 	var validMessages []*pb.ReceivedMessage
 	for _, msg := range rcvdMsgs {
-		deliveryTime, ok := deliveredMsgs[msg.Message.MessageId]
-		timeUntilDeadline := time.Since(time.Unix(deliveryTime, 0))
-		if ok && timeUntilDeadline < defaultAckDeadline { // TODO(nigel): This should be configurable per subscriptpion
+		ackDeadline, ok := deliveredMsgs[msg.Message.MessageId]
+		if ok && time.Now().Before(time.Unix(ackDeadline, 0)) {
 			continue
 		}
 		validMessages = append(validMessages, msg)
@@ -241,7 +283,7 @@ func readAllAcks(db *leveldb.DB, subscriptionId string) (map[string]int64, error
 		if err := gob.NewDecoder(bytes.NewReader(iter.Value())).Decode(&deliveredMessage); err != nil {
 			return nil, err
 		}
-		msgToTimestamp[deliveredMessage.MessageID] = deliveredMessage.DeliveryTimestamp
+		msgToTimestamp[deliveredMessage.MessageID] = deliveredMessage.DeliveryTimestamp + int64(deliveredMessage.AckDeadline.Seconds())
 	}
 	return msgToTimestamp, nil
 }
@@ -252,6 +294,7 @@ func writeAcks(db *leveldb.DB, subscriptionId string, rcvdMsgs []*pb.ReceivedMes
 		msg := DeliveredMessage{
 			MessageID:         rcvdMsg.Message.MessageId,
 			DeliveryTimestamp: deliveryTimestamp,
+			AckDeadline:       defaultAckDeadline,
 		}
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(&msg); err != nil {
@@ -339,7 +382,7 @@ func (p *PersistentGserver) CreateTopic(_ context.Context, t *pb.Topic) (*pb.Top
 	_, err := p.db.Get(topicRowKey(t.Name), nil)
 	if err == nil {
 		// Topic already exists
-		return nil, fmt.Errorf("topic %s already exists", t.Name)
+		return nil, status.Errorf(codes.AlreadyExists, "topic %s already exists", t.Name)
 	}
 
 	if !errors.Is(err, leveldb.ErrNotFound) {
@@ -357,7 +400,7 @@ func (p *PersistentGserver) CreateTopic(_ context.Context, t *pb.Topic) (*pb.Top
 	return t, nil
 }
 
-func (p *PersistentGserver) UpdateTopic(ctx context.Context, req *pb.UpdateTopicRequest) (*pb.Topic, error) {
+func (p *PersistentGserver) UpdateTopic(_ context.Context, req *pb.UpdateTopicRequest) (*pb.Topic, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -459,7 +502,7 @@ func (p *PersistentGserver) GetTopic(ctx context.Context, req *pb.GetTopicReques
 	panic("implement me")
 }
 
-func (p *PersistentGserver) ListTopics(ctx context.Context, topicsRequest *pb.ListTopicsRequest) (*pb.ListTopicsResponse, error) {
+func (p *PersistentGserver) ListTopics(ctx context.Context, req *pb.ListTopicsRequest) (*pb.ListTopicsResponse, error) {
 	//TODO implement me
 	panic("implement me")
 }

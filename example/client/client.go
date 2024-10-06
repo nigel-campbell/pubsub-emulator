@@ -1,4 +1,4 @@
-// Command sample-client is a Pub/Sub client that demonstrates how to use the Pub/Sub client library with the Pub/Sub emulator.
+// Command client is a Pub/Sub client that demonstrates how to use the Pub/Sub client library with the Pub/Sub emulator.
 package main
 
 import (
@@ -9,7 +9,10 @@ import (
 	"fmt"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"log"
+	"math/rand"
 	"os"
 	"time"
 )
@@ -22,10 +25,11 @@ const (
 )
 
 var (
-	port        = flag.Int("port", 8085, "port of the Pub/Sub emulator")
-	synchronous = flag.Bool("synchronous", false, "use synchronous pull")
-	pull        = flag.Bool("pull", true, "whether or not the client pulls")
-	duration    = flag.Duration("duration", time.Second*3, "how long to publish messages")
+	port          = flag.Int("port", 8085, "port of the Pub/Sub emulator")
+	synchronous   = flag.Bool("synchronous", true, "use synchronous pull (when false, uses streaming pull)")
+	pull          = flag.Bool("pull", true, "whether or not the client pulls")
+	nackRate      = flag.Float64("nack-rate", 0.0, "rate at which to nack messages")
+	shouldPublish = flag.Bool("publish", true, "whether or not the client publishes")
 )
 
 func main() {
@@ -51,7 +55,11 @@ func run(ctx context.Context) error {
 	log.Printf("initializing new topic against %s\n", os.Getenv("PUBSUB_EMULATOR_HOST"))
 	topic, err := c.CreateTopic(ctx, topicName)
 	if err != nil {
-		return fmt.Errorf("failed to create topic: %w", err)
+		if status.Code(err) == codes.AlreadyExists {
+			topic = c.Topic(topicName)
+		} else {
+			return fmt.Errorf("failed to create topic: %w", err)
+		}
 	}
 	log.Println("new topic created")
 
@@ -73,7 +81,12 @@ func run(ctx context.Context) error {
 			}()
 			subscription.ReceiveSettings.Synchronous = *synchronous
 			err := subscription.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
-				log.Printf("got message: %q\n", string(msg.Data))
+				log.Printf("got message: %q (messageId=%s)\n", string(msg.Data), msg.ID)
+				if shouldNack() {
+					log.Printf("nacking message: %q\n", string(msg.Data))
+					msg.Nack()
+					return
+				}
 				msg.Ack()
 			})
 			if err != nil {
@@ -98,6 +111,16 @@ func run(ctx context.Context) error {
 	return nil
 }
 
+func shouldNack() bool {
+	if *nackRate >= 1 {
+		return true
+	}
+	if *nackRate > 0 && *nackRate < 1 {
+		return rand.Float64() < *nackRate
+	}
+	return false
+}
+
 func publishMessages(ctx context.Context, workerId int, topic *pubsub.Topic, done chan struct{}) error {
 	for {
 		select {
@@ -106,17 +129,19 @@ func publishMessages(ctx context.Context, workerId int, topic *pubsub.Topic, don
 		case <-done:
 			return nil
 		default:
-			data := []byte(fmt.Sprintf("It's %s from worker %d", time.Now().Format(time.RFC3339), workerId))
-			res := topic.Publish(ctx, &pubsub.Message{
-				Data: data,
-			})
-			if _, err := res.Get(ctx); err != nil {
-				return fmt.Errorf("failed to publish message: %w", err)
-			}
-			// Sleep for a random amount of time between 0 and 10 seconds.
-			time.Sleep(time.Second * time.Duration(time.Now().UnixNano()%10))
-			if !*pull {
-				log.Printf("published message: %q\n", string(data))
+			if *shouldPublish {
+				data := []byte(fmt.Sprintf("It's %s from worker %d", time.Now().Format(time.RFC3339), workerId))
+				res := topic.Publish(ctx, &pubsub.Message{
+					Data: data,
+				})
+				if _, err := res.Get(ctx); err != nil {
+					return fmt.Errorf("failed to publish message: %w", err)
+				}
+				// Sleep for a random amount of time between 0 and 10 seconds.
+				time.Sleep(time.Second * time.Duration(time.Now().UnixNano()%10))
+				if !*pull {
+					log.Printf("published message: %q\n", string(data))
+				}
 			}
 		}
 	}
