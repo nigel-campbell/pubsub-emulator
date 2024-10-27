@@ -67,7 +67,11 @@ func run(ctx context.Context) error {
 		Topic: topic,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create subscription: %w", err)
+		if status.Code(err) == codes.AlreadyExists {
+			subscription = c.Subscription(subscriptionName)
+		} else {
+			return fmt.Errorf("failed to create subscription: %w", err)
+		}
 	}
 	log.Println("new subscription created")
 
